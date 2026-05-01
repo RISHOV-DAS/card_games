@@ -89,35 +89,24 @@ export function formatSuccess(data, message = 'Success') {
 
 /**
  * Get card value for scoring (Card 29 rules)
- * @param {string} card - Card notation (e.g., "2H", "10S")
+ * @param {string} card - Card notation (e.g., "JH", "10S")
  * @returns {number} Card value in points
  */
 export function getCardValue(card) {
   const value = card.slice(0, -1);
-  const suits = card.slice(-1);
 
   const baseValues = {
     'A': 1,
-    '2': 2,
-    '3': 3,
-    '4': 4,
-    '5': 5,
-    '6': 6,
-    '7': 7,
-    '8': 8,
-    '9': 9,
-    '10': 10,
+    '7': 0,
+    '8': 0,
+    '9': 2,
+    '10': 1,
     'J': 3,
-    'Q': 3,
-    'K': 3,
+    'Q': 0,
+    'K': 0,
   };
 
-  let points = baseValues[value] || 0;
-
-  // Double points for 9 of trump suit
-  // This is handled in game logic
-  
-  return points;
+  return baseValues[value] || 0;
 }
 
 /**

@@ -1,36 +1,45 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { io } from 'socket.io-client';
 
 let socket = null;
 
 export function useSocket() {
   const socketRef = useRef(null);
+  const [socketInstance, setSocketInstance] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
     if (!socketRef.current) {
       const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3000';
-      
-      socketRef.current = io(socketUrl, {
+
+      const nextSocket = io(socketUrl, {
         reconnection: true,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
         reconnectionAttempts: 5,
       });
 
-      socketRef.current.on('connect', () => {
-        console.log('Socket connected:', socketRef.current.id);
+      nextSocket.on('connect', () => {
+        setIsConnected(true);
+        console.log('Socket connected:', nextSocket.id);
       });
 
-      socketRef.current.on('disconnect', () => {
+      nextSocket.on('disconnect', () => {
+        setIsConnected(false);
         console.log('Socket disconnected');
       });
 
-      socketRef.current.on('connect_error', (error) => {
+      nextSocket.on('connect_error', (error) => {
         console.error('Socket connection error:', error);
       });
-    }
 
-    socket = socketRef.current;
+      socketRef.current = nextSocket;
+      setSocketInstance(nextSocket);
+      socket = nextSocket;
+    } else {
+      setSocketInstance(socketRef.current);
+      setIsConnected(socketRef.current.connected);
+    }
 
     return () => {
       // Don't disconnect on unmount - keep connection alive
@@ -61,17 +70,19 @@ export function useSocket() {
     if (socketRef.current) {
       socketRef.current.disconnect();
       socketRef.current = null;
+      setSocketInstance(null);
+      setIsConnected(false);
       socket = null;
     }
   }, []);
 
   return {
-    socket: socketRef.current,
+    socket: socketInstance,
     emit,
     on,
     off,
     disconnect,
-    isConnected: socketRef.current?.connected || false,
+    isConnected,
   };
 }
 

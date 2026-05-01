@@ -1,4 +1,4 @@
-import { prisma } from '@/app/lib/db';
+import { query, formatDatabaseErrorResponse } from '@/app/lib/db';
 import { comparePassword, generateToken } from '@/app/lib/auth';
 import { isValidEmail, formatError, formatSuccess } from '@/app/lib/utils';
 
@@ -23,12 +23,14 @@ export async function POST(request) {
     }
 
     // Find user by email
-    const user = await prisma.user.findUnique({
-      where: { email },
-      include: {
-        stats: true,
-      },
-    });
+    const userResult = await query(
+      `SELECT "id", "email", "username", "password"
+       FROM "User"
+       WHERE "email" = $1
+       LIMIT 1`,
+      [email]
+    );
+    const user = userResult.rows[0];
 
     if (!user) {
       return Response.json(
@@ -63,6 +65,12 @@ export async function POST(request) {
     );
   } catch (error) {
     console.error('Login error:', error);
+
+    const databaseErrorResponse = formatDatabaseErrorResponse(error);
+    if (databaseErrorResponse) {
+      return databaseErrorResponse;
+    }
+
     return Response.json(
       formatError('Internal server error'),
       { status: 500 }

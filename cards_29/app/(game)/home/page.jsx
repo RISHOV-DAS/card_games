@@ -126,7 +126,7 @@ export default function HomePage() {
           transition={{ delay: 0.2 }}
           className="grid md:grid-cols-2 gap-6"
         >
-          <Card hover className="cursor-pointer hover:bg-[var(--accent)]" onClick={() => router.push('/create-room')}>
+          <Card hover className="cursor-pointer hover:bg-[var(--accent)]" onClick={() => router.push('/home/create-room')}>
             <div className="text-center">
               <p className="text-4xl mb-2">➕</p>
               <h2 className="text-xl font-bold text-[var(--foreground)] mb-2">
@@ -138,7 +138,7 @@ export default function HomePage() {
             </div>
           </Card>
 
-          <Card hover className="cursor-pointer hover:bg-[var(--accent)]" onClick={() => router.push('/join-room')}>
+          <Card hover className="cursor-pointer hover:bg-[var(--accent)]" onClick={() => router.push('/home/join-room')}>
             <div className="text-center">
               <p className="text-4xl mb-2">🚪</p>
               <h2 className="text-xl font-bold text-[var(--foreground)] mb-2">

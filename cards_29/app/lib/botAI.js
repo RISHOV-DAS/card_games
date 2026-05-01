@@ -1,170 +1,146 @@
 /**
- * Bot AI Logic for Card 29
+ * Bot helpers for Twenty-Nine.
  */
 
 import {
-  getCardValue,
-  getValidPlays,
-  calculateTrickWinner,
+  MAX_BID,
+  MIN_BID,
   SUITS,
-} from './gameLogic';
+  calculateTrickWinner,
+  getCardPoints,
+  getCardStrength,
+  getCardSuit,
+  getPlayerTeam,
+  getValidPlays,
+} from './gameLogic.js';
 
-/**
- * Get bot's card choice
- * @param {string[]} hand - Bot's hand
- * @param {Object} gameState - Current game state
- * @param {string} difficulty - Bot difficulty (easy, medium, hard)
- * @returns {string} Card to play
- */
+export function getBotBid(hand, gameState, difficulty = 'medium') {
+  const suitScores = scoreSuits(hand);
+  const strongestSuit = Object.values(suitScores).sort((a, b) => b.score - a.score)[0];
+  const currentBid = gameState.bid.highestBid;
+  const minimumAllowedBid = currentBid === null ? MIN_BID : currentBid + 1;
+
+  if (minimumAllowedBid > MAX_BID) {
+    return null;
+  }
+
+  const confidence = strongestSuit.score;
+
+  if (difficulty === 'easy') {
+    return confidence >= 7 && Math.random() > 0.45 ? minimumAllowedBid : null;
+  }
+
+  if (difficulty === 'medium') {
+    if (confidence < 8) {
+      return null;
+    }
+
+    return Math.min(minimumAllowedBid + Math.max(0, Math.floor((confidence - 8) / 2)), 22);
+  }
+
+  if (confidence < 7) {
+    return null;
+  }
+
+  return Math.min(minimumAllowedBid + Math.max(0, Math.floor((confidence - 7) / 2)), 24);
+}
+
+export function getBotTrumpDeclaration(hand) {
+  const suitScores = scoreSuits(hand);
+
+  return Object.values(suitScores).sort((a, b) => b.score - a.score)[0]?.suit || SUITS[0];
+}
+
 export function getBotCardChoice(hand, gameState, difficulty = 'medium') {
-  const {
-    playedCards,
-    trumpSuit,
-    ledSuit,
-    scores,
-    round,
-    totalRounds,
-    players,
-    botId,
-  } = gameState;
+  const validPlays = getValidPlays(hand, gameState.currentTrick);
 
-  const validPlays = getValidPlays(hand, playedCards, trumpSuit, ledSuit);
-
-  if (validPlays.length === 0) return hand[0]; // Fallback
-
-  switch (difficulty) {
-    case 'easy':
-      return getEasyBotCard(validPlays, gameState);
-    case 'medium':
-      return getMediumBotCard(validPlays, hand, gameState);
-    case 'hard':
-      return getHardBotCard(validPlays, hand, gameState);
-    default:
-      return validPlays[0];
-  }
-}
-
-/**
- * Easy Bot - Random valid play
- */
-function getEasyBotCard(validPlays, gameState) {
-  return validPlays[Math.floor(Math.random() * validPlays.length)];
-}
-
-/**
- * Medium Bot - Strategic plays
- */
-function getMediumBotCard(validPlays, hand, gameState) {
-  const { playedCards, trumpSuit, ledSuit, scores } = gameState;
-
-  // High-value cards
-  const sortedByValue = validPlays.sort(
-    (a, b) => getCardValue(b, trumpSuit) - getCardValue(a, trumpSuit)
-  );
-
-  // If winning current trick, play low card
-  const trickWinner = calculateTrickWinner(playedCards, trumpSuit, []);
-  if (trickWinner === gameState.botId) {
-    return sortedByValue[sortedByValue.length - 1];
+  if (!validPlays.length) {
+    return hand[0] || null;
   }
 
-  // If losing, try to throw high card (waste it)
-  return sortedByValue[0];
-}
-
-/**
- * Hard Bot - Advanced strategy
- */
-function getHardBotCard(validPlays, hand, gameState) {
-  const { playedCards, trumpSuit, ledSuit, scores, players } = gameState;
-
-  // Calculate current trick value
-  let trickValue = 0;
-  for (const card of Object.values(playedCards)) {
-    trickValue += getCardValue(card, trumpSuit);
+  if (difficulty === 'easy') {
+    return validPlays[Math.floor(Math.random() * validPlays.length)];
   }
 
-  // Get cards by value
-  const sortedByValue = validPlays.sort(
-    (a, b) => getCardValue(b, trumpSuit) - getCardValue(a, trumpSuit)
-  );
+  const orderedLowToHigh = [...validPlays].sort((left, right) => {
+    const pointDelta = getCardPoints(left) - getCardPoints(right);
 
-  // If we can win with minimal investment
-  const canWinLow = sortedByValue.find((card) => {
-    // Simple heuristic: if playing this card would win, do it
-    return getCardValue(card, trumpSuit) >= getCardValue(Object.values(playedCards)[0] || '2H', trumpSuit);
+    if (pointDelta !== 0) {
+      return pointDelta;
+    }
+
+    return getCardStrength(left) - getCardStrength(right);
   });
 
-  if (canWinLow && Object.keys(playedCards).length > 0) {
-    return canWinLow;
+  const winningPlays = orderedLowToHigh.filter((card) => {
+    const projectedWinner = calculateTrickWinner(
+      [...gameState.currentTrick, { playerId: gameState.currentPlayerId, card }],
+      gameState.trumpSuit
+    );
+
+    return projectedWinner === gameState.currentPlayerId;
+  });
+
+  if (!gameState.currentTrick.length) {
+    return difficulty === 'hard'
+      ? leadBestCard(orderedLowToHigh, gameState)
+      : orderedLowToHigh[0];
   }
 
-  // Defensive play: discard lowest value cards first
-  return sortedByValue[sortedByValue.length - 1];
+  if (winningPlays.length > 0) {
+    return winningPlays[0];
+  }
+
+  return difficulty === 'hard'
+    ? discardForPartner(orderedLowToHigh, gameState)
+    : orderedLowToHigh[0];
 }
 
-/**
- * Get bot's trump declaration
- */
-export function getBotTrumpDeclaration(hand, difficulty = 'medium') {
-  // Count cards in each suit
-  const suitCounts = {
-    H: 0,
-    D: 0,
-    C: 0,
-    S: 0,
-  };
-
-  const suitValues = {
-    H: 0,
-    D: 0,
-    C: 0,
-    S: 0,
-  };
-
-  for (const card of hand) {
-    const suit = card.slice(-1);
-    suitCounts[suit]++;
-
-    // High value cards: 9=14, 10=10, J/Q/K=3, A=1
-    const value = card.slice(0, -1);
-    let cardValue = 0;
-
-    if (value === '9') cardValue = 14;
-    else if (value === '10') cardValue = 10;
-    else if (['J', 'Q', 'K'].includes(value)) cardValue = 3;
-    else if (value === 'A') cardValue = 1;
-    else cardValue = parseInt(value);
-
-    suitValues[suit] += cardValue;
-  }
-
-  // Choose suit with highest value
-  let bestSuit = 'H';
-  let bestValue = 0;
-
-  for (const suit of SUITS) {
-    const value = suitValues[suit] + suitCounts[suit] * 2; // Bonus for having more cards
-    if (value > bestValue) {
-      bestValue = value;
-      bestSuit = suit;
-    }
-  }
-
-  return bestSuit;
-}
-
-/**
- * Simulate bot think time for realistic gameplay
- */
 export async function simulateBotThinkTime(difficulty = 'medium') {
-  const times = {
-    easy: Math.random() * 500 + 500,
-    medium: Math.random() * 800 + 800,
-    hard: Math.random() * 1500 + 1000,
+  const delays = {
+    easy: 450,
+    medium: 800,
+    hard: 1200,
   };
 
-  return new Promise((resolve) =>
-    setTimeout(resolve, times[difficulty] || 800)
-  );
+  return new Promise((resolve) => {
+    setTimeout(resolve, delays[difficulty] || delays.medium);
+  });
+}
+
+function scoreSuits(hand) {
+  return SUITS.reduce((accumulator, suit) => {
+    const suitCards = hand.filter((card) => getCardSuit(card) === suit);
+    const score = suitCards.reduce((total, card) => total + getCardStrength(card) + getCardPoints(card), 0);
+
+    accumulator[suit] = {
+      suit,
+      cards: suitCards,
+      score: score + suitCards.length,
+    };
+
+    return accumulator;
+  }, {});
+}
+
+function leadBestCard(cards, gameState) {
+  const ownTeam = getPlayerTeam(gameState.currentPlayerOrder);
+  const highPointCard = cards.find((card) => getCardPoints(card) >= 2);
+
+  if (ownTeam === getPlayerTeam(gameState.bidWinnerOrder) && highPointCard) {
+    return highPointCard;
+  }
+
+  return cards[cards.length - 1];
+}
+
+function discardForPartner(cards, gameState) {
+  const currentWinnerId = calculateTrickWinner(gameState.currentTrick, gameState.trumpSuit);
+  const currentWinner = gameState.players.find((player) => player.id === currentWinnerId);
+
+  if (currentWinner && getPlayerTeam(currentWinner.playerOrder) === getPlayerTeam(gameState.currentPlayerOrder)) {
+    return cards[0];
+  }
+
+  return cards.find((card) => getCardPoints(card) === 0) || cards[0];
 }

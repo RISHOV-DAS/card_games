@@ -10,12 +10,38 @@ import { Card } from '@/app/components/ui/Card';
 import { Modal } from '@/app/components/ui/Modal';
 import { motion } from 'framer-motion';
 
+function normalizePlayer(player, index = 0) {
+  return {
+    id: player.user?.id || player.userId || player.id,
+    username: player.user?.username || player.username || `Player ${index + 1}`,
+    isBot: Boolean(player.isBot),
+    botDifficulty: player.botDifficulty || 'medium',
+    playerOrder: player.playerOrder || index + 1,
+  };
+}
+
+function mergePlayers(players) {
+  const seen = new Map();
+
+  players.forEach((player, index) => {
+    const normalized = normalizePlayer(player, index);
+
+    if (!normalized.id) {
+      return;
+    }
+
+    seen.set(normalized.id, normalized);
+  });
+
+  return [...seen.values()].sort((left, right) => left.playerOrder - right.playerOrder);
+}
+
 export default function LobbyPage() {
   const router = useRouter();
   const { roomId } = useParams();
   const { user, token } = useAuthStore();
   const { socket, emit, on, off } = useSocket();
-  const { roomId: storeRoomId, players, setPlayers, hostId } = useGameStore();
+  const { players, setPlayers, hostId } = useGameStore();
   
   const [localPlayers, setLocalPlayers] = useState(players);
   const [roomCode, setRoomCode] = useState('');
@@ -35,7 +61,7 @@ export default function LobbyPage() {
     // Fetch room data
     const fetchRoom = async () => {
       try {
-        const response = await fetch(`/api/rooms?code=${roomId}`, {
+        const response = await fetch(`/api/rooms?id=${roomId}`, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -44,7 +70,9 @@ export default function LobbyPage() {
         const data = await response.json();
         if (response.ok) {
           setRoomCode(data.data.code);
-          setLocalPlayers(data.data.players);
+          const nextPlayers = mergePlayers(data.data.players);
+          setLocalPlayers(nextPlayers);
+          setPlayers(nextPlayers);
         }
       } catch (error) {
         console.error('Failed to fetch room:', error);
@@ -55,18 +83,18 @@ export default function LobbyPage() {
 
     // Socket events
     const handlePlayerJoined = (playerData) => {
-      setLocalPlayers((prev) => [...prev, playerData]);
+      setLocalPlayers((prev) => mergePlayers([...prev, playerData]));
     };
 
     const handlePlayerLeft = ({ playerId }) => {
       setLocalPlayers((prev) => prev.filter((p) => p.id !== playerId));
     };
 
-    const handleBotAdded = ({ botId, difficulty }) => {
-      setLocalPlayers((prev) => [...prev, { id: botId, isBot: true, botDifficulty: difficulty }]);
+    const handleBotAdded = (playerData) => {
+      setLocalPlayers((prev) => mergePlayers([...prev, playerData]));
     };
 
-    const handleGameStarted = (gameData) => {
+    const handleGameStarted = () => {
       router.push(`/game/${roomId}`);
     };
 
@@ -86,7 +114,7 @@ export default function LobbyPage() {
       off('game:bot-added', handleBotAdded);
       off('game:started', handleGameStarted);
     };
-  }, [user, token, roomId, socket, emit, on, off, router]);
+  }, [user, token, roomId, socket, emit, on, off, router, setPlayers]);
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(roomCode);
@@ -103,12 +131,12 @@ export default function LobbyPage() {
 
   const handleStartGame = () => {
     setLoading(true);
-    emit('game:start', { roomId, players: localPlayers });
+    emit('game:start', { roomId, roomCode, players: localPlayers });
     // Router will be handled by the game:started event
   };
 
   const canAddBot = localPlayers.length < 4;
-  const allPlayersReady = localPlayers.length >= 2; // At least 2 players
+  const allPlayersReady = localPlayers.length === 4;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[var(--background)] to-[var(--primary)] p-4">
@@ -169,9 +197,9 @@ export default function LobbyPage() {
                       {index + 1}
                     </div>
                     <div className="flex-1">
-                      <p className="font-semibold text-[var(--foreground)]">
-                        {player.user?.username || `Bot - ${player.botDifficulty}`}
-                      </p>
+                        <p className="font-semibold text-[var(--foreground)]">
+                        {player.username || `Bot - ${player.botDifficulty}`}
+                        </p>
                       <p className="text-sm text-[var(--foreground)]/60">
                         {player.isBot ? `AI (${player.botDifficulty})` : 'Online'}
                       </p>

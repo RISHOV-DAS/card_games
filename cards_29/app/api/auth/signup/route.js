@@ -1,4 +1,4 @@
-import { prisma } from '@/app/lib/db';
+import { query, withTransaction, createId, formatDatabaseErrorResponse } from '@/app/lib/db';
 import { hashPassword, generateToken } from '@/app/lib/auth';
 import { isValidEmail, isValidUsername, validatePassword, formatError, formatSuccess } from '@/app/lib/utils';
 
@@ -45,9 +45,11 @@ export async function POST(request) {
     }
 
     // Check if user already exists
-    const existingUser = await prisma.user.findUnique({
-      where: { email },
-    });
+    const existingUserResult = await query(
+      'SELECT "id" FROM "User" WHERE "email" = $1 LIMIT 1',
+      [email]
+    );
+    const existingUser = existingUserResult.rows[0];
 
     if (existingUser) {
       return Response.json(
@@ -58,19 +60,25 @@ export async function POST(request) {
 
     // Hash password and create user
     const hashedPassword = await hashPassword(password);
-    const user = await prisma.user.create({
-      data: {
-        email,
-        username,
-        password: hashedPassword,
-      },
-    });
+    let user;
 
-    // Create user stats
-    await prisma.userStats.create({
-      data: {
-        userId: user.id,
-      },
+    await withTransaction(async (client) => {
+      const userResult = await query(
+        `INSERT INTO "User" ("id", "email", "username", "password", "createdAt", "updatedAt")
+         VALUES ($1, $2, $3, $4, NOW(), NOW())
+         RETURNING "id", "email", "username"`,
+        [createId(), email, username, hashedPassword],
+        client
+      );
+
+      user = userResult.rows[0];
+
+      await query(
+        `INSERT INTO "UserStats" ("id", "userId", "gamesPlayed", "gamesWon", "totalScore", "cardsPlayed", "winRate")
+         VALUES ($1, $2, 0, 0, 0, 0, 0)`,
+        [createId(), user.id],
+        client
+      );
     });
 
     // Generate token
@@ -89,6 +97,19 @@ export async function POST(request) {
     );
   } catch (error) {
     console.error('Signup error:', error);
+
+    if (error?.code === '23505') {
+      return Response.json(
+        formatError('Email already registered'),
+        { status: 409 }
+      );
+    }
+
+    const databaseErrorResponse = formatDatabaseErrorResponse(error);
+    if (databaseErrorResponse) {
+      return databaseErrorResponse;
+    }
+
     return Response.json(
       formatError('Internal server error'),
       { status: 500 }

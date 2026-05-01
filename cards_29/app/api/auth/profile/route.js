@@ -1,4 +1,5 @@
-import { prisma } from '@/app/lib/db';
+import { query, formatDatabaseErrorResponse } from '@/app/lib/db';
+import { getUserIdFromToken } from '@/app/lib/auth';
 import { isValidUsername, formatError, formatSuccess } from '@/app/lib/utils';
 
 /**
@@ -17,7 +18,7 @@ export async function GET(request) {
 
     // For now, we'll parse the token manually
     // In production, use a proper JWT verification
-    const userId = extractUserIdFromToken(token);
+    const userId = getUserIdFromToken(token);
 
     if (!userId) {
       return Response.json(
@@ -26,16 +27,45 @@ export async function GET(request) {
       );
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        username: true,
-        stats: true,
-        createdAt: true,
-      },
-    });
+    const userResult = await query(
+      `SELECT
+        userRecord."id",
+        userRecord."email",
+        userRecord."username",
+        userRecord."createdAt",
+        stats."id" AS "statsId",
+        stats."userId" AS "statsUserId",
+        stats."gamesPlayed",
+        stats."gamesWon",
+        stats."totalScore",
+        stats."cardsPlayed",
+        stats."winRate"
+      FROM "User" userRecord
+      LEFT JOIN "UserStats" stats ON stats."userId" = userRecord."id"
+      WHERE userRecord."id" = $1
+      LIMIT 1`,
+      [userId]
+    );
+    const row = userResult.rows[0];
+    const user = row
+      ? {
+          id: row.id,
+          email: row.email,
+          username: row.username,
+          createdAt: row.createdAt,
+          stats: row.statsId
+            ? {
+                id: row.statsId,
+                userId: row.statsUserId,
+                gamesPlayed: row.gamesPlayed,
+                gamesWon: row.gamesWon,
+                totalScore: row.totalScore,
+                cardsPlayed: row.cardsPlayed,
+                winRate: row.winRate,
+              }
+            : null,
+        }
+      : null;
 
     if (!user) {
       return Response.json(
@@ -47,6 +77,12 @@ export async function GET(request) {
     return Response.json(formatSuccess(user));
   } catch (error) {
     console.error('Get profile error:', error);
+
+    const databaseErrorResponse = formatDatabaseErrorResponse(error);
+    if (databaseErrorResponse) {
+      return databaseErrorResponse;
+    }
+
     return Response.json(
       formatError('Internal server error'),
       { status: 500 }
@@ -68,7 +104,7 @@ export async function PUT(request) {
       );
     }
 
-    const userId = extractUserIdFromToken(token);
+    const userId = getUserIdFromToken(token);
 
     if (!userId) {
       return Response.json(
@@ -87,43 +123,36 @@ export async function PUT(request) {
       );
     }
 
-    const user = await prisma.user.update({
-      where: { id: userId },
-      data: { username },
-      select: {
-        id: true,
-        email: true,
-        username: true,
-      },
-    });
+    const userResult = await query(
+      `UPDATE "User"
+       SET "username" = $1, "updatedAt" = NOW()
+       WHERE "id" = $2
+       RETURNING "id", "email", "username"`,
+      [username, userId]
+    );
+    const user = userResult.rows[0];
+
+    if (!user) {
+      return Response.json(
+        formatError('User not found'),
+        { status: 404 }
+      );
+    }
 
     return Response.json(
       formatSuccess(user, 'Username updated successfully')
     );
   } catch (error) {
     console.error('Update profile error:', error);
+
+    const databaseErrorResponse = formatDatabaseErrorResponse(error);
+    if (databaseErrorResponse) {
+      return databaseErrorResponse;
+    }
+
     return Response.json(
       formatError('Internal server error'),
       { status: 500 }
     );
-  }
-}
-
-// Helper function to extract user ID from token
-function extractUserIdFromToken(token) {
-  try {
-    // This is a simplified approach - in production use proper JWT verification
-    const base64Url = token.split('.')[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const jsonPayload = decodeURIComponent(
-      atob(base64)
-        .split('')
-        .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-        .join('')
-    );
-    const payload = JSON.parse(jsonPayload);
-    return payload.userId;
-  } catch {
-    return null;
   }
 }

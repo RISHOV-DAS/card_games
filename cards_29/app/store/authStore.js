@@ -161,7 +161,7 @@ export const useAuthStore = create(
             localStorage.removeItem('token');
             return false;
           }
-        } catch (error) {
+        } catch {
           set({ token: null, isLoading: false });
           localStorage.removeItem('token');
           return false;

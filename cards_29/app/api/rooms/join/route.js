@@ -1,4 +1,5 @@
-import { prisma } from '@/app/lib/db';
+import { createId, getRoomByIdOrCode, query, withTransaction, formatDatabaseErrorResponse } from '@/app/lib/db';
+import { getUserIdFromToken } from '@/app/lib/auth';
 import { formatError, formatSuccess } from '@/app/lib/utils';
 
 /**
@@ -15,7 +16,7 @@ export async function POST(request) {
       );
     }
 
-    const userId = extractUserIdFromToken(token);
+    const userId = getUserIdFromToken(token);
 
     if (!userId) {
       return Response.json(
@@ -33,74 +34,74 @@ export async function POST(request) {
       );
     }
 
-    // Find room
-    const room = await prisma.room.findUnique({
-      where: { code: roomCode },
-      include: {
-        players: true,
-      },
+    let roomId;
+    const normalizedRoomCode = roomCode.toUpperCase();
+
+    const joinResult = await withTransaction(async (client) => {
+      const roomResult = await query(
+        `SELECT "id", "status", "maxPlayers"
+         FROM "Room"
+         WHERE "code" = $1
+         LIMIT 1
+         FOR UPDATE`,
+        [normalizedRoomCode],
+        client
+      );
+      const room = roomResult.rows[0];
+
+      if (!room) {
+        return { error: 'Room not found', status: 404 };
+      }
+
+      if (room.status !== 'waiting') {
+        return { error: 'Room is not accepting new players', status: 400 };
+      }
+
+      const existingPlayerResult = await query(
+        `SELECT "id"
+         FROM "RoomPlayer"
+         WHERE "roomId" = $1 AND "userId" = $2
+         LIMIT 1`,
+        [room.id, userId],
+        client
+      );
+
+      if (existingPlayerResult.rows[0]) {
+        return { error: 'You are already in this room', status: 400 };
+      }
+
+      const playerCountResult = await query(
+        `SELECT COUNT(*)::int AS "playerCount"
+         FROM "RoomPlayer"
+         WHERE "roomId" = $1`,
+        [room.id],
+        client
+      );
+      const playerCount = playerCountResult.rows[0]?.playerCount ?? 0;
+
+      if (playerCount >= room.maxPlayers) {
+        return { error: 'Room is full', status: 400 };
+      }
+
+      await query(
+        `INSERT INTO "RoomPlayer" ("id", "roomId", "userId", "playerOrder", "isBot", "score", "joinedAt")
+         VALUES ($1, $2, $3, $4, FALSE, 0, NOW())`,
+        [createId(), room.id, userId, playerCount + 1],
+        client
+      );
+
+      roomId = room.id;
+      return { status: 200 };
     });
 
-    if (!room) {
+    if (joinResult.error) {
       return Response.json(
-        formatError('Room not found'),
-        { status: 404 }
+        formatError(joinResult.error),
+        { status: joinResult.status }
       );
     }
 
-    if (room.status !== 'waiting') {
-      return Response.json(
-        formatError('Room is not accepting new players'),
-        { status: 400 }
-      );
-    }
-
-    // Check if player already in room
-    const existingPlayer = await prisma.roomPlayer.findFirst({
-      where: {
-        roomId: room.id,
-        userId: userId,
-      },
-    });
-
-    if (existingPlayer) {
-      return Response.json(
-        formatError('You are already in this room'),
-        { status: 400 }
-      );
-    }
-
-    // Check if room is full
-    if (room.players.length >= room.maxPlayers) {
-      return Response.json(
-        formatError('Room is full'),
-        { status: 400 }
-      );
-    }
-
-    // Add player to room
-    const nextOrder = room.players.length + 1;
-    await prisma.roomPlayer.create({
-      data: {
-        roomId: room.id,
-        userId: userId,
-        playerOrder: nextOrder,
-        isBot: false,
-      },
-    });
-
-    // Fetch updated room
-    const updatedRoom = await prisma.room.findUnique({
-      where: { id: room.id },
-      include: {
-        host: true,
-        players: {
-          include: {
-            user: true,
-          },
-        },
-      },
-    });
+    const updatedRoom = await getRoomByIdOrCode({ id: roomId });
 
     return Response.json(
       formatSuccess(updatedRoom, 'Joined room successfully'),
@@ -108,27 +109,15 @@ export async function POST(request) {
     );
   } catch (error) {
     console.error('Join room error:', error);
+
+    const databaseErrorResponse = formatDatabaseErrorResponse(error);
+    if (databaseErrorResponse) {
+      return databaseErrorResponse;
+    }
+
     return Response.json(
       formatError('Internal server error'),
       { status: 500 }
     );
-  }
-}
-
-// Helper function
-function extractUserIdFromToken(token) {
-  try {
-    const base64Url = token.split('.')[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const jsonPayload = decodeURIComponent(
-      atob(base64)
-        .split('')
-        .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-        .join('')
-    );
-    const payload = JSON.parse(jsonPayload);
-    return payload.userId;
-  } catch {
-    return null;
   }
 }

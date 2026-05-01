@@ -1,4 +1,5 @@
-import { prisma } from '@/app/lib/db';
+import { createId, getRoomByIdOrCode, query, withTransaction, formatDatabaseErrorResponse } from '@/app/lib/db';
+import { getUserIdFromToken } from '@/app/lib/auth';
 import { generateRoomCode, formatError, formatSuccess } from '@/app/lib/utils';
 
 /**
@@ -15,7 +16,7 @@ export async function POST(request) {
       );
     }
 
-    const userId = extractUserIdFromToken(token);
+    const userId = getUserIdFromToken(token);
 
     if (!userId) {
       return Response.json(
@@ -26,36 +27,29 @@ export async function POST(request) {
 
     // Create room
     const code = generateRoomCode();
-    const room = await prisma.room.create({
-      data: {
-        code,
-        hostId: userId,
-        maxPlayers: 4,
-      },
-    });
+    let roomId;
 
-    // Add host as first player
-    await prisma.roomPlayer.create({
-      data: {
-        roomId: room.id,
-        userId: userId,
-        playerOrder: 1,
-        isBot: false,
-      },
+    await withTransaction(async (client) => {
+      const roomResult = await query(
+        `INSERT INTO "Room" ("id", "hostId", "code", "status", "maxPlayers", "createdAt")
+         VALUES ($1, $2, $3, 'waiting', $4, NOW())
+         RETURNING "id"`,
+        [createId(), userId, code, 4],
+        client
+      );
+
+      roomId = roomResult.rows[0].id;
+
+      await query(
+        `INSERT INTO "RoomPlayer" ("id", "roomId", "userId", "playerOrder", "isBot", "score", "joinedAt")
+         VALUES ($1, $2, $3, 1, FALSE, 0, NOW())`,
+        [createId(), roomId, userId],
+        client
+      );
     });
 
     // Fetch complete room data
-    const completeRoom = await prisma.room.findUnique({
-      where: { id: room.id },
-      include: {
-        host: true,
-        players: {
-          include: {
-            user: true,
-          },
-        },
-      },
-    });
+    const completeRoom = await getRoomByIdOrCode({ id: roomId });
 
     return Response.json(
       formatSuccess(completeRoom, 'Room created successfully'),
@@ -63,6 +57,12 @@ export async function POST(request) {
     );
   } catch (error) {
     console.error('Create room error:', error);
+
+    const databaseErrorResponse = formatDatabaseErrorResponse(error);
+    if (databaseErrorResponse) {
+      return databaseErrorResponse;
+    }
+
     return Response.json(
       formatError('Internal server error'),
       { status: 500 }
@@ -75,26 +75,17 @@ export async function POST(request) {
  */
 export async function GET(request) {
   try {
+    const id = request.nextUrl.searchParams.get('id');
     const code = request.nextUrl.searchParams.get('code');
 
-    if (!code) {
+    if (!id && !code) {
       return Response.json(
-        formatError('Room code is required'),
+        formatError('Room id or room code is required'),
         { status: 400 }
       );
     }
 
-    const room = await prisma.room.findUnique({
-      where: { code },
-      include: {
-        host: true,
-        players: {
-          include: {
-            user: true,
-          },
-        },
-      },
-    });
+    const room = await getRoomByIdOrCode(id ? { id } : { code });
 
     if (!room) {
       return Response.json(
@@ -106,27 +97,15 @@ export async function GET(request) {
     return Response.json(formatSuccess(room));
   } catch (error) {
     console.error('Get room error:', error);
+
+    const databaseErrorResponse = formatDatabaseErrorResponse(error);
+    if (databaseErrorResponse) {
+      return databaseErrorResponse;
+    }
+
     return Response.json(
       formatError('Internal server error'),
       { status: 500 }
     );
-  }
-}
-
-// Helper function
-function extractUserIdFromToken(token) {
-  try {
-    const base64Url = token.split('.')[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const jsonPayload = decodeURIComponent(
-      atob(base64)
-        .split('')
-        .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-        .join('')
-    );
-    const payload = JSON.parse(jsonPayload);
-    return payload.userId;
-  } catch {
-    return null;
   }
 }

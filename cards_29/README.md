@@ -20,18 +20,19 @@ A modern, real-time multiplayer Card 29 game built with Next.js, featuring smoot
 ### Prerequisites
 
 - Node.js 18+ and npm
-- PostgreSQL database (NeonDB recommended)
+- A Supabase project with Postgres enabled
 
 ### 1. Setup Environment
 
-```bash
-# Copy and configure environment variables
-cp .env.local.example .env.local
+Create `.env.local` and add:
 
-# Edit .env.local and add:
-# - DATABASE_URL: Your NeonDB connection string
-# - NEXTAUTH_SECRET: Random secret (generate with: openssl rand -base64 32)
+```bash
+SUPABASE_DB_URL="postgresql://postgres.[YOUR_PROJECT_REF]:[YOUR_PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres"
+NEXTAUTH_SECRET="your-random-jwt-secret"
+NEXT_PUBLIC_SOCKET_URL="http://localhost:3000"
 ```
+
+*Note: We recommend using the Supabase Connection Pooler URL (port 6543) for IPv4 compatibility.*
 
 ### 2. Install Dependencies
 
@@ -41,16 +42,13 @@ npm install
 
 ### 3. Setup Database
 
+Apply project tables automatically:
+
 ```bash
-# Generate Prisma client
-npx prisma generate
-
-# Push schema to database (creates tables)
-npx prisma db push
-
-# (Optional) Open Prisma Studio to view data
-npx prisma studio
+npm run db:setup
 ```
+
+This imports `database/schema.sql` into your configured Postgres database and verifies all required tables.
 
 ### 4. Run Development Server
 
@@ -60,7 +58,25 @@ npm run dev
 
 The app will be available at `http://localhost:3000`
 
-### 5. Build for Production
+### 5. V1 Ready-to-Test Checklist
+
+Run these commands before testing:
+
+```bash
+npm run db:setup
+npm run lint
+npm run build
+npm run dev
+```
+
+Smoke test flow:
+- Create an account
+- Login
+- Create room
+- Join room with second player or bots
+- Start game and play at least one full trick
+
+### 6. Build for Production
 
 ```bash
 npm run build
@@ -99,8 +115,8 @@ cards_29/
 │   ├── lib/                 # Utilities and logic
 │   ├── store/               # Zustand stores
 │   └── layout.jsx           # Root layout
-├── prisma/
-│   └── schema.prisma        # Database schema
+├── database/
+│   └── schema.sql           # Database schema
 ├── server.js                # Custom Socket.io server
 ├── .env.local               # Environment variables
 └── package.json
@@ -110,8 +126,8 @@ cards_29/
 
 - **Frontend**: Next.js 16, React 19, Tailwind CSS
 - **Backend**: Node.js, Express, Socket.io
-- **Database**: PostgreSQL (Neon)
-- **ORM**: Prisma
+- **Database**: Supabase Postgres
+- **Queries**: `pg` with handwritten SQL
 - **State**: Zustand
 - **Animations**: Framer Motion
 - **Auth**: JWT + bcryptjs
@@ -188,23 +204,15 @@ git push origin main
 1. Go to [vercel.com](https://vercel.com)
 2. Click "New Project" and import your GitHub repo
 3. Set environment variables in Vercel dashboard:
-   - `DATABASE_URL`
+   - `SUPABASE_DB_URL`
    - `NEXTAUTH_SECRET`
    - `NEXTAUTH_URL` (your Vercel domain)
    - `NEXT_PUBLIC_SOCKET_URL` (your Vercel domain)
 4. Click "Deploy"
 
-### 3. Database Migration
-
-Run migrations on deployed database:
-
-```bash
-npx prisma migrate deploy
-```
-
 ## 📝 Database Schema
 
-See `prisma/schema.prisma` for the complete schema including:
+See `database/schema.sql` for the complete schema including:
 - User accounts with stats
 - Rooms with players
 - Game rounds and card history
@@ -220,9 +228,9 @@ Get-Process -Id (Get-NetTCPConnection -LocalPort 3000).OwningProcess | Stop-Proc
 ```
 
 ### Database connection error
-- Check `DATABASE_URL` in `.env.local`
-- Ensure NeonDB is running and accessible
-- Run `npx prisma db push` to create tables
+- Check `SUPABASE_DB_URL` in `.env.local`
+- Ensure the Supabase database is reachable
+- Run the SQL in `database/schema.sql`
 
 ### Socket.io connection issues
 - Check `NEXT_PUBLIC_SOCKET_URL` matches your domain

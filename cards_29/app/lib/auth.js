@@ -42,7 +42,7 @@ export function generateToken(payload, expiresIn = 60 * 60 * 24 * 7) {
 export function verifyToken(token) {
   try {
     return jwt.verify(token, JWT_SECRET);
-  } catch (error) {
+  } catch {
     return null;
   }
 }

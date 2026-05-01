@@ -1,4 +1,5 @@
-import { prisma } from '@/app/lib/db';
+import { query, formatDatabaseErrorResponse } from '@/app/lib/db';
+import { getUserIdFromToken } from '@/app/lib/auth';
 import { formatError, formatSuccess } from '@/app/lib/utils';
 
 /**
@@ -15,7 +16,7 @@ export async function GET(request) {
       );
     }
 
-    const userId = extractUserIdFromToken(token);
+    const userId = getUserIdFromToken(token);
 
     if (!userId) {
       return Response.json(
@@ -24,9 +25,11 @@ export async function GET(request) {
       );
     }
 
-    const stats = await prisma.userStats.findUnique({
-      where: { userId },
-    });
+    const statsResult = await query(
+      'SELECT * FROM "UserStats" WHERE "userId" = $1 LIMIT 1',
+      [userId]
+    );
+    const stats = statsResult.rows[0];
 
     if (!stats) {
       return Response.json(
@@ -38,6 +41,12 @@ export async function GET(request) {
     return Response.json(formatSuccess(stats));
   } catch (error) {
     console.error('Get stats error:', error);
+
+    const databaseErrorResponse = formatDatabaseErrorResponse(error);
+    if (databaseErrorResponse) {
+      return databaseErrorResponse;
+    }
+
     return Response.json(
       formatError('Internal server error'),
       { status: 500 }
@@ -59,7 +68,7 @@ export async function PUT(request) {
       );
     }
 
-    const userId = extractUserIdFromToken(token);
+    const userId = getUserIdFromToken(token);
 
     if (!userId) {
       return Response.json(
@@ -71,42 +80,64 @@ export async function PUT(request) {
     const body = await request.json();
     const { gamesPlayed, gamesWon, totalScore, cardsPlayed } = body;
 
-    const stats = await prisma.userStats.update({
-      where: { userId },
-      data: {
-        gamesPlayed: gamesPlayed !== undefined ? gamesPlayed : undefined,
-        gamesWon: gamesWon !== undefined ? gamesWon : undefined,
-        totalScore: totalScore !== undefined ? totalScore : undefined,
-        cardsPlayed: cardsPlayed !== undefined ? cardsPlayed : undefined,
-        winRate: gamesPlayed && gamesWon ? (gamesWon / gamesPlayed) * 100 : undefined,
-      },
-    });
+    if (
+      gamesPlayed === undefined &&
+      gamesWon === undefined &&
+      totalScore === undefined &&
+      cardsPlayed === undefined
+    ) {
+      return Response.json(
+        formatError('At least one stats field is required'),
+        { status: 400 }
+      );
+    }
+
+    const existingStatsResult = await query(
+      'SELECT * FROM "UserStats" WHERE "userId" = $1 LIMIT 1',
+      [userId]
+    );
+    const existingStats = existingStatsResult.rows[0];
+
+    if (!existingStats) {
+      return Response.json(
+        formatError('Stats not found'),
+        { status: 404 }
+      );
+    }
+
+    const nextGamesPlayed = gamesPlayed !== undefined ? Number(gamesPlayed) : existingStats.gamesPlayed;
+    const nextGamesWon = gamesWon !== undefined ? Number(gamesWon) : existingStats.gamesWon;
+    const nextTotalScore = totalScore !== undefined ? Number(totalScore) : existingStats.totalScore;
+    const nextCardsPlayed = cardsPlayed !== undefined ? Number(cardsPlayed) : existingStats.cardsPlayed;
+    const nextWinRate = nextGamesPlayed > 0 ? (nextGamesWon / nextGamesPlayed) * 100 : 0;
+
+    const statsResult = await query(
+      `UPDATE "UserStats"
+       SET "gamesPlayed" = $1,
+           "gamesWon" = $2,
+           "totalScore" = $3,
+           "cardsPlayed" = $4,
+           "winRate" = $5
+       WHERE "userId" = $6
+       RETURNING *`,
+      [nextGamesPlayed, nextGamesWon, nextTotalScore, nextCardsPlayed, nextWinRate, userId]
+    );
+    const stats = statsResult.rows[0];
 
     return Response.json(
       formatSuccess(stats, 'Stats updated successfully')
     );
   } catch (error) {
     console.error('Update stats error:', error);
+
+    const databaseErrorResponse = formatDatabaseErrorResponse(error);
+    if (databaseErrorResponse) {
+      return databaseErrorResponse;
+    }
+
     return Response.json(
       formatError('Internal server error'),
       { status: 500 }
     );
-  }
-}
-
-function extractUserIdFromToken(token) {
-  try {
-    const base64Url = token.split('.')[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const jsonPayload = decodeURIComponent(
-      atob(base64)
-        .split('')
-        .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-        .join('')
-    );
-    const payload = JSON.parse(jsonPayload);
-    return payload.userId;
-  } catch {
-    return null;
   }
 }

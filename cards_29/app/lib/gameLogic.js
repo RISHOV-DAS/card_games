@@ -1,207 +1,339 @@
 /**
- * Card 29 Game Logic
- * 
- * Rules:
- * - 4 players
- * - Standard 52-card deck
- * - Points: A=1, 2-9=face value, 10/J/Q/K=0 (except trump)
- * - In trump suit: 9=14, 10=10, J=3, Q=3, K=3, A=1
- * - Total points in deck: 28 (so 29 is declared)
- * - First to reach 52 points wins (or highest score after all deals)
+ * Twenty-Nine game logic.
  */
 
-export const SUITS = ['H', 'D', 'C', 'S']; // Hearts, Diamonds, Clubs, Spades
-export const VALUES = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+export const SUITS = ['H', 'D', 'C', 'S'];
+export const RANKS = ['J', '9', 'A', '10', 'K', 'Q', '8', '7'];
+export const GAME_PHASES = {
+  INIT: 'init',
+  BIDDING: 'bidding',
+  TRUMP_SELECTION: 'trump_selection',
+  PLAY: 'play',
+  TRICK_RESOLUTION: 'trick_resolution',
+  SCORING: 'scoring',
+  COMPLETED: 'completed',
+};
 
-/**
- * Create a shuffled deck
- */
+export const MIN_BID = 16;
+export const MAX_BID = 28;
+export const INITIAL_HAND_SIZE = 4;
+export const FULL_HAND_SIZE = 8;
+export const TOTAL_TRICKS = 8;
+export const LAST_TRICK_BONUS = 1;
+
+const RANK_STRENGTH = {
+  J: 8,
+  '9': 7,
+  A: 6,
+  '10': 5,
+  K: 4,
+  Q: 3,
+  '8': 2,
+  '7': 1,
+};
+
+const CARD_POINTS = {
+  J: 3,
+  '9': 2,
+  A: 1,
+  '10': 1,
+  K: 0,
+  Q: 0,
+  '8': 0,
+  '7': 0,
+};
+
 export function createDeck() {
   const deck = [];
+
   for (const suit of SUITS) {
-    for (const value of VALUES) {
-      deck.push(`${value}${suit}`);
+    for (const rank of RANKS) {
+      deck.push(`${rank}${suit}`);
     }
   }
+
   return shuffleArray(deck);
 }
 
-/**
- * Shuffle array (Fisher-Yates)
- */
-function shuffleArray(array) {
-  const arr = [...array];
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
+export function shuffleArray(array) {
+  const copy = [...array];
+
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [copy[index], copy[swapIndex]] = [copy[swapIndex], copy[index]];
   }
-  return arr;
+
+  return copy;
 }
 
-/**
- * Deal cards to 4 players (8 cards each)
- */
-export function dealCards(deck) {
-  const hands = [[], [], [], []];
-  for (let i = 0; i < 32; i++) {
-    hands[i % 4].push(deck[i]);
-  }
-  const trumpCard = deck[32];
-  return { hands, trumpCard };
+export function getCardRank(card) {
+  return card.slice(0, -1);
 }
 
-/**
- * Get card value for scoring
- */
-export function getCardValue(card, trumpSuit) {
-  const value = card.slice(0, -1);
-  const suit = card.slice(-1);
+export function getCardSuit(card) {
+  return card.slice(-1);
+}
 
-  const baseValues = {
-    'A': 1, '2': 2, '3': 3, '4': 4, '5': 5,
-    '6': 6, '7': 7, '8': 8, '9': 9, '10': 10,
-    'J': 0, 'Q': 0, 'K': 0,
+export function getCardPoints(card) {
+  return CARD_POINTS[getCardRank(card)] || 0;
+}
+
+export function getCardStrength(card) {
+  return RANK_STRENGTH[getCardRank(card)] || 0;
+}
+
+export function getCardValue(card) {
+  return getCardPoints(card);
+}
+
+export function createCard(card) {
+  return {
+    suit: getCardSuit(card),
+    rank: getCardRank(card),
+    points: getCardPoints(card),
+    strength: getCardStrength(card),
+    code: card,
   };
-
-  let points = baseValues[value];
-
-  // Trump suit special values
-  if (suit === trumpSuit) {
-    if (value === '9') return 14;
-    if (value === '10') return 10;
-    if (value === 'J') return 3;
-    if (value === 'Q') return 3;
-    if (value === 'K') return 3;
-    if (value === 'A') return 1;
-  }
-
-  return points;
 }
 
-/**
- * Calculate round winner and points
- * Trick is won by: highest trump > highest card of led suit > any other
- */
-export function calculateTrickWinner(playedCards, trumpSuit, playerOrder) {
-  // playedCards: { playerId: card }
-  // playerOrder: array of player IDs in order
+export function dealCards(deck, playerIds) {
+  const hands = Object.fromEntries(playerIds.map((playerId) => [playerId, []]));
+  let deckIndex = 0;
 
-  if (Object.keys(playedCards).length === 0) return null;
-
-  const cards = Object.entries(playedCards);
-  const firstCard = cards[0][1];
-  const ledSuit = firstCard.slice(-1);
-
-  let winner = cards[0][0];
-  let winningCard = firstCard;
-
-  for (let i = 1; i < cards.length; i++) {
-    const [playerId, card] = cards[i];
-    const suit = card.slice(-1);
-
-    if (suit === trumpSuit) {
-      if (winningCard.slice(-1) !== trumpSuit) {
-        winner = playerId;
-        winningCard = card;
-      } else {
-        // Both trump - compare values
-        if (compareCards(card, winningCard, trumpSuit) > 0) {
-          winner = playerId;
-          winningCard = card;
-        }
-      }
-    } else if (suit === ledSuit && winningCard.slice(-1) !== trumpSuit) {
-      if (compareCards(card, winningCard, trumpSuit) > 0) {
-        winner = playerId;
-        winningCard = card;
-      }
+  for (let round = 0; round < FULL_HAND_SIZE; round += 1) {
+    for (const playerId of playerIds) {
+      hands[playerId].push(deck[deckIndex]);
+      deckIndex += 1;
     }
   }
 
-  return winner;
+  return hands;
 }
 
-/**
- * Compare two cards (return 1 if first is higher, -1 if second is higher)
- */
-function compareCards(card1, card2, trumpSuit) {
-  const value1 = card1.slice(0, -1);
-  const value2 = card2.slice(0, -1);
+export function dealInitialHands(deck, playerIds) {
+  const hands = Object.fromEntries(playerIds.map((playerId) => [playerId, []]));
+  let deckIndex = 0;
 
-  const rankOrder = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
-
-  const idx1 = rankOrder.indexOf(value1);
-  const idx2 = rankOrder.indexOf(value2);
-
-  return idx1 > idx2 ? 1 : -1;
-}
-
-/**
- * Calculate total points for a player's tricks
- */
-export function calculatePlayerPoints(tricks, trumpSuit) {
-  let points = 0;
-  for (const cards of Object.values(tricks)) {
-    for (const card of cards) {
-      points += getCardValue(card, trumpSuit);
+  for (let round = 0; round < INITIAL_HAND_SIZE; round += 1) {
+    for (const playerId of playerIds) {
+      hands[playerId].push(deck[deckIndex]);
+      deckIndex += 1;
     }
   }
-  return points;
+
+  return {
+    hands,
+    nextDeckIndex: deckIndex,
+  };
 }
 
-/**
- * Check if a play is valid (following suit rule, throwing trump if can't follow)
- */
-export function isValidPlay(
-  playedCard,
-  playerHand,
-  playedCards,
-  trumpSuit,
-  ledSuit
-) {
-  // If no cards played yet, any card is valid
-  if (Object.keys(playedCards).length === 0) return true;
-
-  const cardSuit = playedCard.slice(-1);
-
-  // Must follow led suit if possible
-  const hasSuitCard = playerHand.some(
-    (card) => card.slice(-1) === ledSuit
+export function dealRemainingHands(deck, playerIds, hands, startIndex) {
+  const nextHands = Object.fromEntries(
+    playerIds.map((playerId) => [playerId, [...(hands[playerId] || [])]])
   );
+  let deckIndex = startIndex;
 
-  if (hasSuitCard && cardSuit !== ledSuit) {
+  for (let round = INITIAL_HAND_SIZE; round < FULL_HAND_SIZE; round += 1) {
+    for (const playerId of playerIds) {
+      nextHands[playerId].push(deck[deckIndex]);
+      deckIndex += 1;
+    }
+  }
+
+  return {
+    hands: nextHands,
+    nextDeckIndex: deckIndex,
+  };
+}
+
+export function getPlayerTeam(playerOrder) {
+  return playerOrder % 2 === 1 ? 1 : 2;
+}
+
+export function getTeamKey(playerOrder) {
+  return `team${getPlayerTeam(playerOrder)}`;
+}
+
+export function getNextPlayerOrder(currentOrder, totalPlayers = 4) {
+  return currentOrder === totalPlayers ? 1 : currentOrder + 1;
+}
+
+export function getTrickLeadSuit(currentTrick = []) {
+  if (!currentTrick.length) {
+    return null;
+  }
+
+  return getCardSuit(currentTrick[0].card || currentTrick[0]);
+}
+
+export function getValidPlays(playerHand, currentTrick = []) {
+  if (!currentTrick.length) {
+    return [...playerHand];
+  }
+
+  const leadSuit = getTrickLeadSuit(currentTrick);
+  const suitedCards = playerHand.filter((card) => getCardSuit(card) === leadSuit);
+
+  if (suitedCards.length > 0) {
+    return suitedCards;
+  }
+
+  return [...playerHand];
+}
+
+export function canRevealTrump(playerHand, currentTrick, trumpSuit, trumpRevealed) {
+  if (trumpRevealed || !trumpSuit || !currentTrick.length) {
     return false;
   }
 
-  return true;
+  const leadSuit = getTrickLeadSuit(currentTrick);
+  const hasLeadSuit = playerHand.some((card) => getCardSuit(card) === leadSuit);
+  const hasTrump = playerHand.some((card) => getCardSuit(card) === trumpSuit);
+
+  return !hasLeadSuit && hasTrump;
 }
 
-/**
- * Get valid plays for a player
- */
-export function getValidPlays(playerHand, playedCards, trumpSuit, ledSuit) {
-  if (Object.keys(playedCards).length === 0) return playerHand;
-
-  const validPlays = [];
-
-  // Try to follow suit
-  const suitCards = playerHand.filter(
-    (card) => card.slice(-1) === ledSuit
-  );
-
-  if (suitCards.length > 0) {
-    return suitCards;
+export function isValidBid(amount, highestBid) {
+  if (!Number.isInteger(amount)) {
+    return false;
   }
 
-  // If can't follow, must throw trump if possible
-  const trumpCards = playerHand.filter(
-    (card) => card.slice(-1) === trumpSuit
-  );
-
-  if (trumpCards.length > 0) {
-    return trumpCards;
+  if (amount < MIN_BID || amount > MAX_BID) {
+    return false;
   }
 
-  // Otherwise any card
-  return playerHand;
+  if (highestBid === null) {
+    return true;
+  }
+
+  return amount > highestBid;
+}
+
+export function isValidPlay({
+  playedCard,
+  playerHand,
+  currentTrick = [],
+  trumpSuit,
+  trumpRevealed,
+}) {
+  if (!playerHand.includes(playedCard)) {
+    return false;
+  }
+
+  const validPlays = getValidPlays(playerHand, currentTrick);
+
+  if (!validPlays.includes(playedCard)) {
+    return false;
+  }
+
+  if (!trumpSuit || trumpRevealed) {
+    return true;
+  }
+
+  const playedSuit = getCardSuit(playedCard);
+
+  if (playedSuit !== trumpSuit) {
+    return true;
+  }
+
+  if (!currentTrick.length) {
+    return true;
+  }
+
+  return canRevealTrump(playerHand, currentTrick, trumpSuit, trumpRevealed);
+}
+
+export function compareCards(cardA, cardB) {
+  return getCardStrength(cardA) - getCardStrength(cardB);
+}
+
+export function getTrickWinner(currentTrick, trumpSuit) {
+  if (!currentTrick.length) {
+    return null;
+  }
+
+  const leadSuit = getTrickLeadSuit(currentTrick);
+  const trumpCards = trumpSuit
+    ? currentTrick.filter((play) => getCardSuit(play.card) === trumpSuit)
+    : [];
+  const eligibleCards = trumpCards.length > 0
+    ? trumpCards
+    : currentTrick.filter((play) => getCardSuit(play.card) === leadSuit);
+
+  return eligibleCards.reduce((bestPlay, currentPlay) => {
+    if (!bestPlay) {
+      return currentPlay;
+    }
+
+    return compareCards(currentPlay.card, bestPlay.card) > 0 ? currentPlay : bestPlay;
+  }, null);
+}
+
+export function calculateTrickWinner(playedCards, trumpSuit) {
+  const currentTrick = Array.isArray(playedCards)
+    ? playedCards
+    : Object.entries(playedCards).map(([playerId, card]) => ({ playerId, card }));
+  const winner = getTrickWinner(currentTrick, trumpSuit);
+
+  return winner?.playerId || null;
+}
+
+export function calculateTrickPoints(currentTrick, isLastTrick = false) {
+  const basePoints = currentTrick.reduce((total, play) => total + getCardPoints(play.card), 0);
+
+  return isLastTrick ? basePoints + LAST_TRICK_BONUS : basePoints;
+}
+
+export function calculatePlayerPoints(tricks, includeLastTrickBonus = true) {
+  return tricks.reduce((total, trick, index) => {
+    const isLastTrick = includeLastTrickBonus && index === tricks.length - 1;
+    return total + calculateTrickPoints(trick.cards || trick, isLastTrick);
+  }, 0);
+}
+
+export function evaluateRound({
+  bidAmount,
+  bidWinnerOrder,
+  teamPoints,
+}) {
+  const bidderTeam = getTeamKey(bidWinnerOrder);
+  const defenderTeam = bidderTeam === 'team1' ? 'team2' : 'team1';
+  const bidderPoints = teamPoints[bidderTeam] || 0;
+  const bidderSucceeded = bidderPoints >= bidAmount;
+  const winningTeam = bidderSucceeded ? bidderTeam : defenderTeam;
+
+  return {
+    bidderTeam,
+    defenderTeam,
+    bidderPoints,
+    bidAmount,
+    bidderSucceeded,
+    winningTeam,
+    gamePoints: {
+      team1: winningTeam === 'team1' ? 1 : 0,
+      team2: winningTeam === 'team2' ? 1 : 0,
+    },
+  };
+}
+
+export function getSuitSymbol(suit) {
+  const symbols = {
+    H: '♥',
+    D: '♦',
+    C: '♣',
+    S: '♠',
+  };
+
+  return symbols[suit] || suit;
+}
+
+export function getSuitName(suit) {
+  const names = {
+    H: 'Hearts',
+    D: 'Diamonds',
+    C: 'Clubs',
+    S: 'Spades',
+  };
+
+  return names[suit] || suit;
 }
